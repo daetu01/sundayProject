@@ -26,7 +26,13 @@ import {
   type MouseEvent as ReactMouseEvent
 } from "react";
 
-type WindowId = "main" | "detail" | "compose" | "insights" | "quicklook";
+type WindowId =
+  | "main"
+  | "detail"
+  | "compose"
+  | "insights"
+  | "quicklook"
+  | "spotlight";
 
 type Post = {
   id: number;
@@ -53,8 +59,25 @@ type MainWindowState = {
   width: number;
   height: number;
   minimized: boolean;
+  minimizing: boolean;
   fullscreen: boolean;
   storedFrame: { x: number; y: number; width: number; height: number } | null;
+};
+
+type FloatingWindowState = {
+  x: number;
+  y: number;
+};
+
+type SpotlightResult = {
+  id: string;
+  title: string;
+  subtitle: string;
+  calories: string;
+  macros: string;
+  image: string;
+  source: "history" | "database";
+  postId?: number;
 };
 
 const menuItems = [
@@ -308,6 +331,11 @@ export default function Home() {
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [hoveredPost, setHoveredPost] = useState<Post | null>(null);
   const [quickLookPost, setQuickLookPost] = useState<Post | null>(null);
+  const [isSpotlightOpen, setIsSpotlightOpen] = useState(false);
+  const [spotlightQuery, setSpotlightQuery] = useState("");
+  const [spotlightResults, setSpotlightResults] = useState<SpotlightResult[]>([]);
+  const [spotlightActiveIndex, setSpotlightActiveIndex] = useState(0);
+  const [isSpotlightLoading, setIsSpotlightLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [isInsightsOpen, setIsInsightsOpen] = useState(false);
@@ -315,6 +343,14 @@ export default function Home() {
   const [currentTime, setCurrentTime] = useState("");
   const [viewport, setViewport] = useState({ width: 1440, height: 980 });
   const [activeWindow, setActiveWindow] = useState<WindowId>("main");
+  const [windowOrder, setWindowOrder] = useState<WindowId[]>([
+    "main",
+    "detail",
+    "compose",
+    "insights",
+    "quicklook",
+    "spotlight"
+  ]);
   const [composeAuthor, setComposeAuthor] = useState("You");
   const [composeHandle, setComposeHandle] = useState("@yourplate");
   const [composeCaption, setComposeCaption] = useState("");
@@ -322,18 +358,52 @@ export default function Home() {
   const [composeMacros, setComposeMacros] = useState("");
   const [composeImage, setComposeImage] = useState("");
   const [isSystemDark, setIsSystemDark] = useState(true);
+  const [detailWindow, setDetailWindow] = useState<FloatingWindowState>({
+    x: 140,
+    y: 120
+  });
+  const [composeWindow, setComposeWindow] = useState<FloatingWindowState>({
+    x: 220,
+    y: 110
+  });
+  const [insightsWindow, setInsightsWindow] = useState<FloatingWindowState>({
+    x: 120,
+    y: 90
+  });
+  const [quickLookWindow, setQuickLookWindow] = useState<FloatingWindowState>({
+    x: 130,
+    y: 100
+  });
+  const [spotlightWindow, setSpotlightWindow] = useState<FloatingWindowState>({
+    x: 260,
+    y: 84
+  });
   const [mainWindow, setMainWindow] = useState<MainWindowState>({
     x: 0,
     y: 0,
     width: 1180,
     height: 780,
     minimized: false,
+    minimizing: false,
     fullscreen: false,
     storedFrame: null
   });
   const [dockMouseX, setDockMouseX] = useState<number | null>(null);
   const [bouncingDockItem, setBouncingDockItem] = useState<string | null>(null);
   const dockRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const windowDragRef = useRef<{
+    id: Exclude<WindowId, "main"> | null;
+    pointerX: number;
+    pointerY: number;
+    startX: number;
+    startY: number;
+  }>({
+    id: null,
+    pointerX: 0,
+    pointerY: 0,
+    startX: 0,
+    startY: 0
+  });
   const dragStateRef = useRef<{
     type: "drag" | "resize" | null;
     pointerX: number;
@@ -453,8 +523,14 @@ export default function Home() {
 
     setMainWindow((current) => ({
       ...current,
-      x: Math.max(12, Math.min(current.x, viewport.width - current.width - 12)),
-      y: Math.max(72, Math.min(current.y, viewport.height - current.height - 110))
+      x: Math.max(
+        -current.width + 220,
+        Math.min(current.x, viewport.width - 180)
+      ),
+      y: Math.max(
+        44,
+        Math.min(current.y, viewport.height - 110)
+      )
     }));
   }, [mainWindow.fullscreen, viewport.height, viewport.width]);
 
@@ -471,6 +547,37 @@ export default function Home() {
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
       if (!dragStateRef.current.type || mainWindow.fullscreen) {
+        if (!windowDragRef.current.id) {
+          return;
+        }
+      }
+
+      if (windowDragRef.current.id) {
+        const deltaX = event.clientX - windowDragRef.current.pointerX;
+        const deltaY = event.clientY - windowDragRef.current.pointerY;
+        const nextPosition = {
+          x: Math.max(
+            -420,
+            Math.min(windowDragRef.current.startX + deltaX, viewport.width - 140)
+          ),
+          y: Math.max(
+            48,
+            Math.min(windowDragRef.current.startY + deltaY, viewport.height - 120)
+          )
+        };
+
+        if (windowDragRef.current.id === "detail") {
+          setDetailWindow(nextPosition);
+        } else if (windowDragRef.current.id === "compose") {
+          setComposeWindow(nextPosition);
+        } else if (windowDragRef.current.id === "insights") {
+          setInsightsWindow(nextPosition);
+        } else if (windowDragRef.current.id === "quicklook") {
+          setQuickLookWindow(nextPosition);
+        } else if (windowDragRef.current.id === "spotlight") {
+          setSpotlightWindow(nextPosition);
+        }
+
         return;
       }
 
@@ -481,17 +588,17 @@ export default function Home() {
         setMainWindow((current) => ({
           ...current,
           x: Math.max(
-            12,
+            -current.width + 220,
             Math.min(
               dragStateRef.current.startX + deltaX,
-              viewport.width - current.width - 12
+              viewport.width - 180
             )
           ),
           y: Math.max(
-            58,
+            44,
             Math.min(
               dragStateRef.current.startY + deltaY,
-              viewport.height - current.height - 96
+              viewport.height - 110
             )
           )
         }));
@@ -513,6 +620,7 @@ export default function Home() {
 
     const handlePointerUp = () => {
       dragStateRef.current.type = null;
+      windowDragRef.current.id = null;
     };
 
     window.addEventListener("pointermove", handlePointerMove);
@@ -541,6 +649,15 @@ export default function Home() {
         setIsSidebarOpen(false);
         setIsComposeOpen(false);
         setIsInsightsOpen(false);
+        setIsSpotlightOpen(false);
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        playSystemClick(1080, 0.04);
+        setIsSpotlightOpen(true);
+        focusWindow("spotlight");
+        return;
       }
 
       if (event.code === "Space" && !isTyping && hoveredPost) {
@@ -561,6 +678,10 @@ export default function Home() {
     };
   }, [hoveredPost]);
 
+  useEffect(() => {
+    setSpotlightActiveIndex(0);
+  }, [spotlightResults]);
+
   const feedSummary = useMemo(() => {
     const totalCalories = posts.reduce((sum, post) => {
       const value = Number.parseInt(post.calories.replace(/[^0-9]/g, ""), 10);
@@ -572,6 +693,128 @@ export default function Home() {
       totalCalories: `${totalCalories.toLocaleString()} kcal`
     };
   }, [posts]);
+
+  const historySpotlightResults = useMemo<SpotlightResult[]>(() => {
+    const keyword = spotlightQuery.trim().toLowerCase();
+
+    if (!keyword) {
+      return posts.slice(0, 5).map((post) => ({
+        id: `history-${post.id}`,
+        title: post.caption.split(".")[0] || post.caption,
+        subtitle: `${post.author} · ${post.handle}`,
+        calories: post.calories,
+        macros: post.macros,
+        image: post.image,
+        source: "history",
+        postId: post.id
+      }));
+    }
+
+    return posts
+      .filter((post) =>
+        [post.author, post.handle, post.caption, post.macros]
+          .join(" ")
+          .toLowerCase()
+          .includes(keyword)
+      )
+      .slice(0, 5)
+      .map((post) => ({
+        id: `history-${post.id}`,
+        title: post.caption.split(".")[0] || post.caption,
+        subtitle: `${post.author} · ${post.handle}`,
+        calories: post.calories,
+        macros: post.macros,
+        image: post.image,
+        source: "history",
+        postId: post.id
+      }));
+  }, [posts, spotlightQuery]);
+
+  useEffect(() => {
+    if (!isSpotlightOpen) {
+      return;
+    }
+
+    const query = spotlightQuery.trim();
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      if (!query) {
+        setSpotlightResults(historySpotlightResults);
+        setIsSpotlightLoading(false);
+        return;
+      }
+
+      setIsSpotlightLoading(true);
+
+      try {
+        const response = await fetch(
+          `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(
+            query
+          )}&search_simple=1&action=process&json=1&page_size=6`,
+          {
+            signal: controller.signal
+          }
+        );
+        const data = (await response.json()) as {
+          products?: Array<{
+            code?: string;
+            product_name?: string;
+            brands?: string;
+            image_front_small_url?: string;
+            nutriments?: {
+              "energy-kcal_100g"?: number;
+              proteins_100g?: number;
+              carbohydrates_100g?: number;
+              fat_100g?: number;
+            };
+          }>;
+        };
+
+        const remoteResults: SpotlightResult[] = (data.products ?? [])
+          .filter((product) => product.product_name)
+          .slice(0, 6)
+          .map((product, index) => {
+            const kcal = Math.round(product.nutriments?.["energy-kcal_100g"] ?? 120);
+            const protein = Math.round(product.nutriments?.proteins_100g ?? 6);
+            const carbs = Math.round(product.nutriments?.carbohydrates_100g ?? 14);
+            const fat = Math.round(product.nutriments?.fat_100g ?? 4);
+
+            return {
+              id: `db-${product.code ?? index}`,
+              title: product.product_name ?? "Unknown food",
+              subtitle: product.brands
+                ? `${product.brands} · Open Food Facts`
+                : "Open Food Facts database",
+              calories: `${kcal} kcal`,
+              macros: `P ${protein}g  C ${carbs}g  F ${fat}g`,
+              image:
+                product.image_front_small_url ||
+                "https://images.unsplash.com/photo-1490645935967-10de6ba17061?auto=format&fit=crop&w=400&q=80",
+              source: "database"
+            };
+          });
+
+        setSpotlightResults([
+          ...historySpotlightResults,
+          ...remoteResults.filter(
+            (remote) =>
+              !historySpotlightResults.some(
+                (local) => local.title.toLowerCase() === remote.title.toLowerCase()
+              )
+          )
+        ]);
+      } catch {
+        setSpotlightResults(historySpotlightResults);
+      } finally {
+        setIsSpotlightLoading(false);
+      }
+    }, 220);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [historySpotlightResults, isSpotlightOpen, spotlightQuery]);
 
   const searchResults = useMemo(() => {
     const keyword = searchQuery.trim().toLowerCase();
@@ -657,6 +900,33 @@ export default function Home() {
     playSystemClick(1180, 0.055);
     setPosts((currentPosts) => [newPost, ...currentPosts]);
     closeCompose();
+  };
+
+  const addSpotlightResultToToday = (result: SpotlightResult) => {
+    const originalPost =
+      result.source === "history" && result.postId
+        ? posts.find((post) => post.id === result.postId)
+        : null;
+
+    const newPost: Post = {
+      id: Date.now(),
+      author: originalPost?.author ?? "Spotlight Result",
+      handle: originalPost?.handle ?? "@food-db",
+      time: "Just now",
+      image: result.image,
+      caption: originalPost?.caption ?? `${result.title}를 Spotlight 검색으로 오늘 식단에 추가했어요.`,
+      calories: originalPost?.calories ?? result.calories,
+      macros: originalPost?.macros ?? result.macros,
+      likes: 0,
+      comments: 0
+    };
+
+    playSystemClick(1220, 0.05);
+    setPosts((currentPosts) => [newPost, ...currentPosts]);
+    setIsSpotlightOpen(false);
+    setSpotlightQuery("");
+    setSpotlightResults([]);
+    setHoveredPost(newPost);
   };
 
   const handleFeedScroll = (event: React.UIEvent<HTMLDivElement>) => {
@@ -761,6 +1031,33 @@ export default function Home() {
     }
   };
 
+  const handleSpotlightKeyDown = (
+    event: React.KeyboardEvent<HTMLInputElement>
+  ) => {
+    if (!spotlightResults.length) {
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setSpotlightActiveIndex((current) =>
+        Math.min(current + 1, spotlightResults.length - 1)
+      );
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setSpotlightActiveIndex((current) => Math.max(current - 1, 0));
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addSpotlightResultToToday(spotlightResults[spotlightActiveIndex]);
+    }
+  };
+
   const startMainDrag = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (mainWindow.fullscreen) {
       return;
@@ -793,6 +1090,28 @@ export default function Home() {
       startY: mainWindow.y,
       startWidth: mainWindow.width,
       startHeight: mainWindow.height
+    };
+  };
+
+  const focusWindow = (id: WindowId) => {
+    setActiveWindow(id);
+    setWindowOrder((current) => [...current.filter((item) => item !== id), id]);
+  };
+
+  const getWindowZIndex = (id: WindowId) => 20 + windowOrder.indexOf(id) * 5;
+
+  const startFloatingDrag = (
+    id: Exclude<WindowId, "main">,
+    event: ReactMouseEvent<HTMLDivElement>,
+    position: FloatingWindowState
+  ) => {
+    focusWindow(id);
+    windowDragRef.current = {
+      id,
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      startX: position.x,
+      startY: position.y
     };
   };
 
@@ -830,13 +1149,24 @@ export default function Home() {
 
   const minimizeMainWindow = () => {
     playSystemClick(640, 0.04);
-    setMainWindow((current) => ({ ...current, minimized: true }));
+    setMainWindow((current) => ({ ...current, minimizing: true }));
+    window.setTimeout(() => {
+      setMainWindow((current) => ({
+        ...current,
+        minimized: true,
+        minimizing: false
+      }));
+    }, 380);
   };
 
   const restoreMainWindow = () => {
     playSystemClick(960, 0.04);
-    setMainWindow((current) => ({ ...current, minimized: false }));
-    setActiveWindow("main");
+    setMainWindow((current) => ({
+      ...current,
+      minimized: false,
+      minimizing: false
+    }));
+    focusWindow("main");
   };
 
   const handleDockAction = (appId: (typeof dockApps)[number]["id"]) => {
@@ -883,6 +1213,14 @@ export default function Home() {
     const falloff = Math.max(0, 1 - distance / 130);
     return 1 + falloff * 0.72;
   };
+
+  const feedDockRect = dockRefs.current.feed?.getBoundingClientRect();
+  const mainGenieX = feedDockRect
+    ? feedDockRect.left - viewport.width / 2 + feedDockRect.width / 2 - 12
+    : 0;
+  const mainGenieY = feedDockRect
+    ? feedDockRect.top - viewport.height + feedDockRect.height / 2 + 42
+    : 160;
 
   const shellTone = isSystemDark
     ? "bg-[rgba(6,10,18,0.84)]"
@@ -1013,18 +1351,21 @@ export default function Home() {
           {!mainWindow.minimized ? (
             <motion.section
               key="main-window"
-              onMouseDown={() => setActiveWindow("main")}
+              onMouseDown={() => focusWindow("main")}
               initial={{ opacity: 0, scale: 0.96, y: 20 }}
               animate={{
-                opacity: 1,
-                scale: 1,
-                x: mainWindow.x,
-                y: mainWindow.y,
+                opacity: mainWindow.minimizing ? 0.18 : 1,
+                scaleX: mainWindow.minimizing ? 0.18 : 1,
+                scaleY: mainWindow.minimizing ? 0.08 : 1,
+                skewX: mainWindow.minimizing ? -18 : 0,
+                x: mainWindow.minimizing ? mainGenieX : mainWindow.x,
+                y: mainWindow.minimizing ? mainGenieY : mainWindow.y,
                 width: mainWindow.width,
                 height: mainWindow.height
               }}
               exit={{ opacity: 0, y: 120, scale: 0.86 }}
               transition={{ duration: 0.38, ease: [0.22, 1, 0.36, 1] }}
+              style={{ originX: 0.5, originY: 0, zIndex: getWindowZIndex("main") }}
               className={`absolute left-0 top-0 z-20 overflow-hidden rounded-[34px] border border-white/20 bg-white/10 shadow-glass backdrop-blur-3xl ${
                 activeWindow !== "main" ? inactiveWindowClass : ""
               }`}
@@ -1438,26 +1779,203 @@ export default function Home() {
       </AnimatePresence>
 
       <AnimatePresence>
+        {isSpotlightOpen ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{ zIndex: getWindowZIndex("spotlight") + 40 }}
+            className="absolute inset-0 flex items-start justify-center bg-[rgba(4,8,18,0.26)] px-4 pt-20 backdrop-blur-lg"
+            onClick={() => setIsSpotlightOpen(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 18 }}
+              animate={{
+                opacity: 1,
+                scale: 1,
+                x: spotlightWindow.x,
+                y: spotlightWindow.y
+              }}
+              exit={{ opacity: 0, scale: 0.97, y: 14 }}
+              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+              onMouseDown={() => focusWindow("spotlight")}
+              style={{ zIndex: getWindowZIndex("spotlight") }}
+              className={`w-full max-w-3xl overflow-hidden rounded-[32px] border border-white/[0.18] bg-[rgba(245,247,255,0.12)] shadow-[0_32px_110px_rgba(2,8,23,0.42)] backdrop-blur-3xl ${
+                activeWindow !== "spotlight" ? inactiveWindowClass : ""
+              }`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div
+                onMouseDown={(event) =>
+                  startFloatingDrag("spotlight", event, spotlightWindow)
+                }
+                className="flex cursor-grab items-center justify-between border-b border-white/10 bg-[rgba(255,255,255,0.08)] px-5 py-4 active:cursor-grabbing"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex gap-2">
+                    <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
+                    <span className="h-3 w-3 rounded-full bg-[#febc2e]" />
+                    <span className="h-3 w-3 rounded-full bg-[#28c840]" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold tracking-[0.18em] text-white/75">
+                      SPOTLIGHT
+                    </p>
+                    <p className="text-xs text-white/[0.46]">
+                      Command + K to search meals and add them instantly
+                    </p>
+                  </div>
+                </div>
+                <div className="rounded-full border border-white/[0.12] bg-white/[0.06] px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-white/[0.5]">
+                  Live Search
+                </div>
+              </div>
+
+              <div className="p-5">
+                <label className="flex items-center gap-3 rounded-[26px] border border-white/[0.14] bg-[rgba(10,18,34,0.42)] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    className="h-5 w-5 text-white/[0.45]"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <circle cx="11" cy="11" r="7" />
+                    <path d="m20 20-3.5-3.5" />
+                  </svg>
+                  <input
+                    autoFocus
+                    value={spotlightQuery}
+                    onChange={(event) => setSpotlightQuery(event.target.value)}
+                    onKeyDown={handleSpotlightKeyDown}
+                    placeholder="Search foods, creators, or meal notes"
+                    className="w-full bg-transparent text-base text-white/[0.92] outline-none placeholder:text-white/[0.36]"
+                  />
+                  <span className="rounded-full border border-white/[0.12] bg-white/[0.06] px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-white/[0.48]">
+                    {isSpotlightLoading ? "Searching" : `${spotlightResults.length} Results`}
+                  </span>
+                </label>
+
+                <div className="mt-4 overflow-hidden rounded-[28px] border border-white/[0.12] bg-[rgba(7,13,24,0.28)]">
+                  <div className="max-h-[420px] overflow-y-auto p-2 [scrollbar-width:none]">
+                    {spotlightResults.length ? (
+                      spotlightResults.map((result, index) => {
+                        const isActive = index === spotlightActiveIndex;
+
+                        return (
+                          <motion.button
+                            key={result.id}
+                            type="button"
+                            whileHover={{ scale: 1.006 }}
+                            whileTap={{ scale: 0.992 }}
+                            onMouseEnter={() => setSpotlightActiveIndex(index)}
+                            onClick={() => addSpotlightResultToToday(result)}
+                            className={`flex w-full items-center gap-4 rounded-[22px] border px-3 py-3 text-left transition ${
+                              isActive
+                                ? "border-cyan-200/30 bg-cyan-100/[0.12] shadow-[0_10px_34px_rgba(103,232,249,0.12)]"
+                                : "border-transparent bg-transparent hover:bg-white/[0.05]"
+                            }`}
+                          >
+                            <img
+                              src={result.image}
+                              alt={result.title}
+                              className="h-14 w-14 rounded-[18px] object-cover"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <p className="truncate text-sm font-semibold text-white/[0.92]">
+                                  {result.title}
+                                </p>
+                                <span
+                                  className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] ${
+                                    result.source === "history"
+                                      ? "bg-white/[0.08] text-white/[0.52]"
+                                      : "bg-cyan-100/[0.12] text-cyan-50/[0.78]"
+                                  }`}
+                                >
+                                  {result.source === "history" ? "History" : "Database"}
+                                </span>
+                              </div>
+                              <p className="mt-1 truncate text-xs text-white/[0.52]">
+                                {result.subtitle}
+                              </p>
+                              <p className="mt-1 truncate text-xs text-white/[0.68]">
+                                {result.macros}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-sm font-medium text-emerald-50/[0.9]">
+                                {result.calories}
+                              </p>
+                              <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-white/[0.38]">
+                                Enter to add
+                              </p>
+                            </div>
+                          </motion.button>
+                        );
+                      })
+                    ) : (
+                      <div className="flex min-h-[180px] items-center justify-center px-6 py-10 text-center text-sm text-white/[0.52]">
+                        {isSpotlightLoading
+                          ? "Searching public food database..."
+                          : "Type a food name to search your history and the public food database."}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.08] px-4 py-3 text-[11px] uppercase tracking-[0.18em] text-white/[0.4]">
+                    <span>Arrow keys to move</span>
+                    <span>Enter to add to today</span>
+                    <span>Esc to close</span>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {quickLookPost ? (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onMouseDown={() => setActiveWindow("quicklook")}
+            onMouseDown={() => focusWindow("quicklook")}
             onClick={() => setQuickLookPost(null)}
-            className="absolute inset-0 z-[72] flex items-center justify-center bg-[rgba(4,8,18,0.45)] px-4 backdrop-blur-xl"
+            style={{ zIndex: getWindowZIndex("quicklook") + 40 }}
+            className="absolute inset-0 flex items-center justify-center bg-[rgba(4,8,18,0.45)] px-4 backdrop-blur-xl"
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.94 }}
-              animate={{ opacity: 1, scale: 1 }}
+              animate={{
+                opacity: 1,
+                scale: 1,
+                x: quickLookWindow.x,
+                y: quickLookWindow.y
+              }}
               exit={{ opacity: 0, scale: 0.96 }}
               transition={{ duration: 0.24 }}
+              style={{ zIndex: getWindowZIndex("quicklook") }}
               className={`w-full max-w-4xl overflow-hidden rounded-[34px] border border-white/[0.18] bg-[rgba(245,247,255,0.12)] shadow-[0_30px_100px_rgba(2,8,23,0.45)] backdrop-blur-3xl ${
                 activeWindow !== "quicklook" ? inactiveWindowClass : ""
               }`}
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="grid gap-0 md:grid-cols-[1.08fr_0.92fr]">
+              <div
+                onMouseDown={(event) =>
+                  startFloatingDrag("quicklook", event, quickLookWindow)
+                }
+                className="cursor-grab border-b border-white/10 bg-[rgba(255,255,255,0.07)] px-5 py-3 active:cursor-grabbing"
+              >
+                <p className="text-xs uppercase tracking-[0.22em] text-white/[0.46]">
+                  Quick Look
+                </p>
+              </div>
+              <div className="grid max-h-[min(72vh,820px)] gap-0 overflow-y-auto md:grid-cols-[1.08fr_0.92fr]">
                 <div className="relative min-h-[380px]">
                   <img
                     src={quickLookPost.image}
@@ -1516,21 +2034,33 @@ export default function Home() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 z-[74] flex items-center justify-center bg-[rgba(4,8,18,0.45)] px-4 backdrop-blur-xl"
+            style={{ zIndex: getWindowZIndex("compose") + 40 }}
+            className="absolute inset-0 flex items-center justify-center bg-[rgba(4,8,18,0.45)] px-4 backdrop-blur-xl"
             onClick={closeCompose}
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.92, y: 24 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
+              animate={{
+                opacity: 1,
+                scale: 1,
+                x: composeWindow.x,
+                y: composeWindow.y
+              }}
               exit={{ opacity: 0, scale: 0.96, y: 18 }}
               transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-              onMouseDown={() => setActiveWindow("compose")}
+              onMouseDown={() => focusWindow("compose")}
+              style={{ zIndex: getWindowZIndex("compose") }}
               className={`w-full max-w-2xl overflow-hidden rounded-[32px] border border-white/[0.18] bg-[rgba(245,247,255,0.12)] shadow-[0_30px_100px_rgba(2,8,23,0.45)] backdrop-blur-3xl ${
                 activeWindow !== "compose" ? inactiveWindowClass : ""
               }`}
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="flex items-center justify-between border-b border-white/10 bg-[rgba(255,255,255,0.08)] px-5 py-4">
+              <div
+                onMouseDown={(event) =>
+                  startFloatingDrag("compose", event, composeWindow)
+                }
+                className="flex cursor-grab items-center justify-between border-b border-white/10 bg-[rgba(255,255,255,0.08)] px-5 py-4 active:cursor-grabbing"
+              >
                 <div className="flex items-center gap-3">
                   <div className="flex gap-2">
                     <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
@@ -1556,7 +2086,7 @@ export default function Home() {
                 </motion.button>
               </div>
 
-              <div className="grid gap-5 p-6">
+              <div className="grid max-h-[min(74vh,760px)] gap-5 overflow-y-auto p-6">
                 <div className="grid gap-4 sm:grid-cols-2">
                   <label className="grid gap-2">
                     <span className="text-xs uppercase tracking-[0.24em] text-white/[0.46]">
@@ -1670,21 +2200,33 @@ export default function Home() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 z-[73] flex items-center justify-center bg-[rgba(4,8,18,0.45)] px-4 backdrop-blur-xl"
+            style={{ zIndex: getWindowZIndex("insights") + 40 }}
+            className="absolute inset-0 flex items-center justify-center bg-[rgba(4,8,18,0.45)] px-4 backdrop-blur-xl"
             onClick={() => setIsInsightsOpen(false)}
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.92, y: 24 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
+              animate={{
+                opacity: 1,
+                scale: 1,
+                x: insightsWindow.x,
+                y: insightsWindow.y
+              }}
               exit={{ opacity: 0, scale: 0.96, y: 18 }}
               transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-              onMouseDown={() => setActiveWindow("insights")}
+              onMouseDown={() => focusWindow("insights")}
+              style={{ zIndex: getWindowZIndex("insights") }}
               className={`w-full max-w-4xl overflow-hidden rounded-[32px] border border-white/[0.18] bg-[rgba(245,247,255,0.12)] shadow-[0_30px_100px_rgba(2,8,23,0.45)] backdrop-blur-3xl ${
                 activeWindow !== "insights" ? inactiveWindowClass : ""
               }`}
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="flex items-center justify-between border-b border-white/10 bg-[rgba(255,255,255,0.08)] px-5 py-4">
+              <div
+                onMouseDown={(event) =>
+                  startFloatingDrag("insights", event, insightsWindow)
+                }
+                className="flex cursor-grab items-center justify-between border-b border-white/10 bg-[rgba(255,255,255,0.08)] px-5 py-4 active:cursor-grabbing"
+              >
                 <div className="flex items-center gap-3">
                   <div className="flex gap-2">
                     <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
@@ -1710,7 +2252,7 @@ export default function Home() {
                 </motion.button>
               </div>
 
-              <div className="grid gap-5 p-6 lg:grid-cols-[1.4fr_0.6fr]">
+              <div className="grid max-h-[min(76vh,820px)] gap-5 overflow-y-auto p-6 lg:grid-cols-[1.4fr_0.6fr]">
                 <GlassPanel className="bg-black/[0.16]">
                   <div className="p-5">
                     <div className="flex items-end justify-between gap-4">
@@ -1832,21 +2374,33 @@ export default function Home() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 z-[75] flex items-center justify-center bg-[rgba(4,8,18,0.45)] px-4 backdrop-blur-xl"
+            style={{ zIndex: getWindowZIndex("detail") + 40 }}
+            className="absolute inset-0 flex items-center justify-center bg-[rgba(4,8,18,0.45)] px-4 backdrop-blur-xl"
             onClick={() => setSelectedPost(null)}
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.92, y: 24 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
+              animate={{
+                opacity: 1,
+                scale: 1,
+                x: detailWindow.x,
+                y: detailWindow.y
+              }}
               exit={{ opacity: 0, scale: 0.96, y: 18 }}
               transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-              onMouseDown={() => setActiveWindow("detail")}
+              onMouseDown={() => focusWindow("detail")}
+              style={{ zIndex: getWindowZIndex("detail") }}
               className={`w-full max-w-3xl overflow-hidden rounded-[32px] border border-white/[0.18] bg-[rgba(245,247,255,0.12)] shadow-[0_30px_100px_rgba(2,8,23,0.45)] backdrop-blur-3xl ${
                 activeWindow !== "detail" ? inactiveWindowClass : ""
               }`}
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="flex items-center justify-between border-b border-white/10 bg-[rgba(255,255,255,0.08)] px-5 py-4">
+              <div
+                onMouseDown={(event) =>
+                  startFloatingDrag("detail", event, detailWindow)
+                }
+                className="flex cursor-grab items-center justify-between border-b border-white/10 bg-[rgba(255,255,255,0.08)] px-5 py-4 active:cursor-grabbing"
+              >
                 <div className="flex items-center gap-3">
                   <div className="flex gap-2">
                     <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
@@ -1872,7 +2426,7 @@ export default function Home() {
                 </motion.button>
               </div>
 
-              <div className="grid gap-0 md:grid-cols-[1.05fr_0.95fr]">
+              <div className="grid max-h-[min(74vh,820px)] gap-0 overflow-y-auto md:grid-cols-[1.05fr_0.95fr]">
                 <div className="relative min-h-[300px]">
                   <img
                     src={selectedPost.image}
